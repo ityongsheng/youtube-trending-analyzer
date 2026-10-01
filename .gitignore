@@ -72,3 +72,10 @@ data/processed/visualizations/*.png
 # Logs
 *.log
 logs/
+
+# Generated reports
+data/processed/*.html
+data/processed/*.json
+data/processed/trend_*.csv
+data/processed/channel_*.csv
+data/processed/competitor_*.csv

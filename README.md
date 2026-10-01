@@ -1,6 +1,6 @@
 # YouTube Trending Analyzer 🎬
 
-[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 一个功能完整的 **YouTube 热度分析工具**，支持多国热榜抓取、热度评分、数据分析和可视化。
@@ -27,6 +27,12 @@
 - [项目结构](#项目结构)
 
 ---
+
+
+> **数据来源（2026）：** YouTube 已于 2025-07 下线综合 Trending 页（`FEtrending` 返回 400）。
+> 爬虫仍会先尝试该页面和 Innertube browse；失败后按地区抓取「本周 + 播放量排序」的公开搜索结果，
+> 再用 player / watch-next 补全播放量、点赞和评论。官方 Data API 只有在设置了 `YOUTUBE_API_KEY`
+> 且 `USE_OFFICIAL_API=true` 时才会使用。
 
 ## 🚀 快速开始
 
@@ -63,7 +69,7 @@ data/
 
 ### 系统要求
 
-- Python 3.8 或更高版本
+- Python 3.9 或更高版本（已在 3.13 验证）
 - pip 包管理器
 - 100 MB 硬盘空间
 - 网络连接
@@ -105,12 +111,12 @@ pip install -r requirements.txt
 
 | 包名 | 版本 | 用途 |
 |------|------|------|
-| requests | 2.31.0 | HTTP 请求 |
-| beautifulsoup4 | 4.12.2 | HTML 解析 |
-| pandas | 2.1.3 | 数据处理 |
-| matplotlib | 3.8.2 | 图表绘制 |
-| seaborn | 0.13.0 | 高级绘图 |
-| schedule | 1.2.0 | 定时任务 |
+| requests | 2.32.3 | HTTP 请求 |
+| beautifulsoup4 | 4.12.3 | HTML 解析 |
+| pandas | 2.2.3 | 数据处理 |
+| matplotlib | 3.9.4 | 图表绘制 |
+| seaborn | 0.13.2 | 高级绘图 |
+| schedule | 1.2.2 | 定时任务 |
 
 ### 步骤 4：验证安装
 

@@ -1,155 +1,172 @@
 # scripts/analyzer.py
-import pandas as pd
+import argparse
 import json
 import logging
-import sys
 import os
-from datetime import datetime
+import sys
+
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import *
+from config import (
+    EXPORT_FORMATS,
+    LOG_FORMAT,
+    LOG_LEVEL,
+    POPULARITY_WEIGHTS,
+    PROCESSED_DATA_DIR,
+    RAW_DATA_DIR,
+    get_timestamp,
+)
+from scripts.utils import resolve_hours
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
+
 class PopularityAnalyzer:
-    def __init__(self):
-        self.weights = POPULARITY_WEIGHTS
-    
+    def __init__(self, weights=None):
+        self.weights = dict(weights or POPULARITY_WEIGHTS)
+
     def calculate_popularity_score(self, video):
         """
-        计算热度分数
-        
-        公式: (views * comments_factor * likes_factor) / (hours_since_upload ^ decay)
+        热度分数 = 基础分数 / 时间衰减因子
+        基础分数 = views * views_weight + comments * comments_weight + likes * likes_weight
+        时间衰减 = hours ^ time_decay
         """
         try:
-            views = video.get('views', 0) or 0
-            comments = video.get('comments', 0) or 0
-            likes = video.get('likes', 0) or 0
-            
-            # 计算发布时间差（小时）
-            try:
-                publish_time_str = video.get('publish_time', '')
-                
-                # 尝试解析发布时间
-                if '小时前' in publish_time_str or 'hour' in publish_time_str.lower():
-                    hours = int(''.join(filter(str.isdigit, publish_time_str.split()[0])))
-                elif '天前' in publish_time_str or 'day' in publish_time_str.lower():
-                    hours = int(''.join(filter(str.isdigit, publish_time_str.split()[0]))) * 24
-                elif '分钟前' in publish_time_str or 'minute' in publish_time_str.lower():
-                    hours = int(''.join(filter(str.isdigit, publish_time_str.split()[0]))) / 60
-                else:
-                    hours = 1  # 默认 1 小时
-            except:
-                hours = 1
-            
-            # 避免除以 0
-            hours = max(hours, 0.5)
-            
-            # 热度分数计算
+            views = float(video.get("views", 0) or 0)
+            comments = float(video.get("comments", 0) or 0)
+            likes = float(video.get("likes", 0) or 0)
+            hours = resolve_hours(video)
             base_score = (
-                views * self.weights['views'] +
-                comments * self.weights['comments'] +
-                likes * self.weights['likes']
+                views * self.weights["views"]
+                + comments * self.weights["comments"]
+                + likes * self.weights["likes"]
             )
-            
-            # 时间衰减
-            popularity_score = base_score / (hours ** self.weights['time_decay'])
-            
-            return popularity_score
-        
-        except Exception as e:
-            logger.debug(f"计算热度分数失败: {str(e)}")
-            return 0
-    
+            decay = hours ** self.weights["time_decay"]
+            if decay <= 0:
+                return 0.0
+            return base_score / decay
+        except Exception as exc:
+            logger.debug("计算热度分数失败: %s", exc)
+            return 0.0
+
+    def base_score(self, video):
+        views = float(video.get("views", 0) or 0)
+        comments = float(video.get("comments", 0) or 0)
+        likes = float(video.get("likes", 0) or 0)
+        return (
+            views * self.weights["views"]
+            + comments * self.weights["comments"]
+            + likes * self.weights["likes"]
+        )
+
     def analyze(self, videos_list):
-        """
-        分析视频列表并计算热度分数
-        
-        Args:
-            videos_list: 视频字典列表
-            
-        Returns:
-            pd.DataFrame: 分析结果
-        """
-        logger.info(f"开始分析 {len(videos_list)} 个视频...")
-        
-        # 转换为 DataFrame
+        logger.info("开始分析 %s 个视频...", len(videos_list))
+        if not videos_list:
+            return pd.DataFrame(columns=[
+                "rank", "title", "channel", "region", "views", "comments", "likes",
+                "publish_time", "popularity_score", "url", "video_id", "scraped_at",
+            ])
         df = pd.DataFrame(videos_list)
-        
-        # 计算热度分数
-        df['popularity_score'] = df.apply(self.calculate_popularity_score, axis=1)
-        
-        # 按热度排序
-        df = df.sort_values('popularity_score', ascending=False)
-        
-        # 添加排名
-        df['rank'] = range(1, len(df) + 1)
-        
-        # 重新排列列
+        for column in ("views", "comments", "likes"):
+            if column not in df.columns:
+                df[column] = 0
+            df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
+        df["hours_since_upload"] = df.apply(resolve_hours, axis=1)
+        df["base_score"] = df.apply(self.base_score, axis=1)
+        df["popularity_score"] = df.apply(self.calculate_popularity_score, axis=1)
+        df = df.sort_values("popularity_score", ascending=False).reset_index(drop=True)
+        df["rank"] = range(1, len(df) + 1)
         columns_order = [
-            'rank', 'title', 'channel', 'region', 'views', 'comments', 'likes',
-            'publish_time', 'popularity_score', 'url', 'video_id', 'scraped_at'
+            "rank", "title", "channel", "region", "views", "comments", "likes",
+            "publish_time", "publish_date", "hours_since_upload", "base_score",
+            "popularity_score", "url", "video_id", "source", "length_seconds", "scraped_at",
         ]
-        
-        # 只保留存在的列
-        existing_columns = [col for col in columns_order if col in df.columns]
-        df = df[existing_columns]
-        
-        logger.info(f"分析完成，共 {len(df)} 个视频")
+        existing = [col for col in columns_order if col in df.columns]
+        extras = [col for col in df.columns if col not in existing]
+        df = df[existing + extras]
+        logger.info("分析完成，共 %s 个视频", len(df))
         return df
-    
+
     def get_top_videos(self, df, n=10):
-        """获取热度最高的 n 个视频"""
         return df.head(n)
-    
+
     def get_by_region(self, df, region):
-        """按地区筛选"""
-        return df[df['region'] == region].head(10)
-    
+        return df[df["region"] == region].head(10)
+
     def get_statistics(self, df):
-        """获取统计信息"""
-        stats = {
-            'total_videos': len(df),
-            'regions': df['region'].nunique() if len(df) > 0 else 0,
-            'avg_views': df['views'].mean() if len(df) > 0 else 0,
-            'avg_score': df['popularity_score'].mean() if len(df) > 0 else 0,
-            'top_channel': df['channel'].value_counts().index[0] if len(df) > 0 else 'N/A',
+        if df is None or len(df) == 0:
+            return {
+                "total_videos": 0,
+                "regions": 0,
+                "avg_views": 0,
+                "avg_score": 0,
+                "top_channel": "N/A",
+            }
+        channels = df["channel"].fillna("").astype(str)
+        channels = channels[channels.str.len() > 0]
+        top_channel = channels.value_counts().index[0] if len(channels) else "N/A"
+        return {
+            "total_videos": int(len(df)),
+            "regions": int(df["region"].nunique()) if "region" in df.columns else 0,
+            "avg_views": float(df["views"].mean()),
+            "avg_score": float(df["popularity_score"].mean()),
+            "top_channel": top_channel,
         }
-        return stats
+
+
+def export_dataframe(df, stem):
+    """Write csv / json / xlsx according to EXPORT_FORMATS. Returns path map."""
+    paths = {}
+    if "csv" in EXPORT_FORMATS:
+        path = os.path.join(PROCESSED_DATA_DIR, f"{stem}.csv")
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        paths["csv"] = path
+    if "json" in EXPORT_FORMATS:
+        path = os.path.join(PROCESSED_DATA_DIR, f"{stem}.json")
+        df.to_json(path, orient="records", force_ascii=False, indent=2)
+        paths["json"] = path
+    if "xlsx" in EXPORT_FORMATS:
+        path = os.path.join(PROCESSED_DATA_DIR, f"{stem}.xlsx")
+        df.to_excel(path, index=False, engine="openpyxl")
+        paths["xlsx"] = path
+    return paths
+
+
+def load_latest_raw():
+    raw_files = sorted(f for f in os.listdir(RAW_DATA_DIR) if f.endswith(".json"))
+    if not raw_files:
+        return None, None
+    latest = os.path.join(RAW_DATA_DIR, raw_files[-1])
+    with open(latest, "r", encoding="utf-8") as handle:
+        return latest, json.load(handle)
+
 
 def main():
-    # 读取原始数据
-    raw_files = sorted([f for f in os.listdir(RAW_DATA_DIR) if f.endswith('.json')])
-    
-    if not raw_files:
+    parser = argparse.ArgumentParser(description="分析已抓取的热榜数据")
+    parser.add_argument("--log-level", default=None)
+    args = parser.parse_args()
+    if args.log_level:
+        logging.getLogger().setLevel(args.log_level.upper())
+
+    latest_raw_file, videos = load_latest_raw()
+    if not videos:
         logger.error("未找到原始数据文件，请先运行 scraper.py")
         return None
-    
-    latest_raw_file = os.path.join(RAW_DATA_DIR, raw_files[-1])
-    logger.info(f"读取数据文件: {latest_raw_file}")
-    
-    with open(latest_raw_file, 'r', encoding='utf-8') as f:
-        videos = json.load(f)
-    
-    # 分析
+    logger.info("读取数据文件: %s", latest_raw_file)
     analyzer = PopularityAnalyzer()
     df_analyzed = analyzer.analyze(videos)
-    
-    # 保存分析结果
-    output_file = os.path.join(PROCESSED_DATA_DIR, f"analyzed_{get_timestamp()}.csv")
-    df_analyzed.to_csv(output_file, index=False, encoding='utf-8-sig')
-    logger.info(f"分析结果已保存到 {output_file}")
-    
-    # 打印统计信息
+    paths = export_dataframe(df_analyzed, f"analyzed_{get_timestamp()}")
+    for kind, path in paths.items():
+        logger.info("分析结果已保存 (%s): %s", kind, path)
     stats = analyzer.get_statistics(df_analyzed)
-    logger.info(f"统计信息: {stats}")
-    
-    # 打印前 10
+    logger.info("统计信息: %s", stats)
+    columns = [c for c in ["rank", "title", "channel", "views", "popularity_score", "region"] if c in df_analyzed.columns]
     logger.info("\n=== TOP 10 热榜视频 ===")
-    print(df_analyzed[['rank', 'title', 'channel', 'views', 'popularity_score', 'region']].head(10).to_string(index=False))
-    
+    print(df_analyzed[columns].head(10).to_string(index=False))
     return df_analyzed
+
 
 if __name__ == "__main__":
     main()
